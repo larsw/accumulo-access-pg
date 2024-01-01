@@ -1,0 +1,6 @@
+comment = 'accumulo_access_pg:  Accumulo access expression parser and evaluator extension.'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/accumulo_access_pg'
+relocatable = false
+superuser = true
+

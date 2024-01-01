@@ -1,0 +1,26 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install PGRX
+      run: cargo install cargo-pgrx && cargo pgrx init --pg15=download
+    - name: Build
+      run: cargo build --verbose --release
+    - name: Run tests
+      run: cargo pgrx test pg15 --verbose
+    - name: Package extension
+      run: cargo pgrx package -c `cargo pgrx info pg-config 15`

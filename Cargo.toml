@@ -1,0 +1,40 @@
+[package]
+name = "accumulo-access-pg"
+version = "0.1.0"
+edition = "2021"
+authors = ["Lars Wilhelmsen <sral-backwards@sral.org>"]
+description = "PostgreSQL extension for parsing and evaluating Accumulo Access Expressions"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/larsw/accumulo-access-pg"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["pg15"]
+pg11 = ["pgrx/pg11", "pgrx-tests/pg11" ]
+pg12 = ["pgrx/pg12", "pgrx-tests/pg12" ]
+pg13 = ["pgrx/pg13", "pgrx-tests/pg13" ]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14" ]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15" ]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
+pg_test = []
+
+[dependencies]
+#accumulo-access = { path = "../accumulo-access-rs/accumulo-access", features = ["caching"] } # for local dev
+accumulo-access = "0.1.3"
+pgrx = "=0.11.2"
+serde = { version = "1.0.194", features = ["derive"] }
+
+[dev-dependencies]
+pgrx-tests = "=0.11.2"
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
