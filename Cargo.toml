@@ -23,9 +23,9 @@ pg_test = []
 
 [dependencies]
 #accumulo-access = { path = "../accumulo-access-rs/accumulo-access", features = ["caching"] } # for local dev
-accumulo-access = "0.1.3"
+accumulo-access = "0.1"
 pgrx = "=0.11.2"
-serde = { version = "1.0.194", features = ["derive"] }
+serde = { version = "1.0.195", features = ["derive"] }
 
 [dev-dependencies]
 pgrx-tests = "=0.11.2"
