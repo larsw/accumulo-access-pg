@@ -8,7 +8,19 @@ use serde::{Deserialize, Serialize};
 pg_module_magic!();
 
 #[pg_extern]
-fn sec_authz_check(expression: String, tokens: String) -> bool {
+fn sec_authz_check(expression: Option<String>, tokens: Option<String>) -> bool {
+    if expression.is_none() || tokens.is_none() {
+        return false;
+    }
+    let expression = expression.unwrap();
+    let tokens = tokens.unwrap();
+
+    if expression.is_empty() {
+        return false;
+    }
+    if tokens.is_empty() {
+        return false;
+    }
     match check_authorization_csv(expression, tokens) {
         Ok(result) => result,
         Err(e) => {
@@ -56,7 +68,7 @@ mod tests {
     fn test_accumulo_check_authorization() {
         let expression = String::from("label1 & label5 & (label2 | \"label 🕺\")");
         let tokens = String::from("label1,label5,label 🕺");
-        assert_eq!(true, crate::sec_authz_check(expression, tokens));
+        assert_eq!(true, crate::sec_authz_check(Some(expression), Some(tokens)));
     }
 }
 
