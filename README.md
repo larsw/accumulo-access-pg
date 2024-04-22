@@ -40,7 +40,7 @@ insert into secret_stuff(data, authz_expr) values('win', 'label2 & (label3 | lab
 
 grant select on secret_stuff to users;
 
-create policy evaluate_policies on secret_stuff using ( sec_authz_check(authz_expr, current_setting('session.authorizations'), ','));
+create policy evaluate_policies on secret_stuff using ( sec_authz_check(authz_expr, current_setting('session.authorizations')));
 
 -- ...
 set session authorization johnny;

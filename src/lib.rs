@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pg_module_magic!();
 
 #[pg_extern]
-fn sec_authz_check(expression: Option<String>, tokens: Option<String>) -> bool {
+fn sec_authz_check(expression: Option<&str>, tokens: Option<&str>) -> bool {
     if expression.is_none() || tokens.is_none() {
         return false;
     }
@@ -21,7 +21,7 @@ fn sec_authz_check(expression: Option<String>, tokens: Option<String>) -> bool {
     if tokens.is_empty() {
         return false;
     }
-    match check_authorization_csv(expression, tokens) {
+    match check_authorization_csv(expression.to_string(), tokens.to_string()) {
         Ok(result) => result,
         Err(e) => {
             let msg = format!("Error parsing expression: {}", e);
@@ -66,8 +66,8 @@ mod tests {
 
     #[pg_test]
     fn test_accumulo_check_authorization() {
-        let expression = String::from("label1 & label5 & (label2 | \"label 🕺\")");
-        let tokens = String::from("label1,label5,label 🕺");
+        let expression = "label1 & label5 & (label2 | \"label 🕺\")";
+        let tokens = "label1,label5,label 🕺";
         assert_eq!(true, crate::sec_authz_check(Some(expression), Some(tokens)));
     }
 }
