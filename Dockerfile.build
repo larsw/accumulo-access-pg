@@ -45,8 +45,5 @@ RUN cd target/artifacts/accumulo_access_pg-pg15 && \
     -a amd64 \
     .
 
-FROM postgis/postgis:15-3.4 AS runtime
-
-COPY --from=build /tmp/accumulo_access_bullseye_pg15_0.1.0_amd64.deb /tmp/
-ADD 10_postgis.sh /docker-entrypoint-initdb.d/
-RUN apt install -y /tmp/accumulo_access_bullseye_pg15_0.1.0_amd64.deb
+FROM scratch
+COPY --from=build /tmp/accumulo_access_bullseye_pg15_0.1.0_amd64.deb /
