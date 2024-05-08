@@ -1,6 +1,6 @@
 [package]
 name = "accumulo_access_pg"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Lars Wilhelmsen <sral-backwards@sral.org>"]
 description = "PostgreSQL extension for parsing and evaluating Accumulo Access Expressions"
