@@ -114,7 +114,7 @@ mod tests {
 
     #[pg_test]
     fn test_accumulo_check_authorization() {
-        let expression = "label1 & label5 & (label2 | \"label 🕺\")";
+        let expression = "label1&label5&(label2|\"label 🕺\")";
         let tokens = "label1,label5,label 🕺";
         assert!(crate::sec_authz_check(Some(expression), Some(tokens)));
     }
