@@ -42,7 +42,7 @@ jobs:
       pg_majors: ${{ steps.resolve.outputs.pg_majors }}
       pg_beta_majors: ${{ steps.resolve.outputs.pg_beta_majors }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve the version and the targeted majors
         id: resolve
@@ -82,12 +82,12 @@ jobs:
       matrix:
         pg: ${{ fromJSON(needs.meta.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build toolchain image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.test
@@ -115,7 +115,7 @@ jobs:
       matrix:
         pg: ${{ fromJSON(needs.meta.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Builds the .deb and proves it installs and works in a real server
       # before it is ever attached to a release.
@@ -134,7 +134,7 @@ jobs:
           echo "$deb"
           dpkg-deb --info "$deb" | sed -n '/^ Package:/p;/^ Version:/p;/^ Pre-Depends:/p'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb-pg${{ matrix.pg }}
           path: out/*.deb
@@ -148,12 +148,12 @@ jobs:
     permissions:
       contents: write  # create the tag and the release, upload the assets
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # release notes are generated from history
 
       - name: Collect the packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: deb-pg*
           merge-multiple: true
