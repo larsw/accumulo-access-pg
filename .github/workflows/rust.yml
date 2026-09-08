@@ -10,17 +10,53 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  # In-backend #[pg_test] suite, once per targeted PostgreSQL major. Runs in the
+  # same image as `./test.sh pgrx` so CI and local runs can't drift.
+  pgrx-tests:
+    name: pgrx tests (pg${{ matrix.pg }})
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in step with the pg* features in Cargo.toml and versions.env.
+        pg: [18, 19]
     steps:
-    - uses: actions/checkout@v3
-    - name: Install PGRX
-      run: cargo install cargo-pgrx && cargo pgrx init --pg15=download
-    - name: Build
-      run: cargo build --verbose --release
-    - name: Run tests
-      run: cargo pgrx test pg15 --verbose
-    - name: Package extension
-      run: cargo pgrx package -c `cargo pgrx info pg-config 15`
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.test
+          tags: accumulo-access-pg-test:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: cargo pgrx test pg${{ matrix.pg }}
+        run: |
+          docker run --rm -v "$PWD:/work" accumulo-access-pg-test:latest \
+            bash -lc "cargo pgrx test pg${{ matrix.pg }}"
+
+  # Builds the .debs, installs them into real server images and runs
+  # tests/integration.sql against each. Versions come from versions.env.
+  package-and-e2e:
+    name: package + end-to-end SQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build packages and images, then test them
+        run: ./test.sh e2e
+
+      - name: Package version
+        id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: accumulo-access-pg-debs-${{ steps.version.outputs.version }}
+          path: out/*.deb
+          if-no-files-found: error

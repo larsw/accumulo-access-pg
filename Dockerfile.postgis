@@ -1,11 +1,29 @@
-FROM postgis/postgis:15-3.4 AS runtime
+# syntax=docker/dockerfile:1
+#
+# PostGIS + accumulo_access_pg.
+#
+#   docker build -f Dockerfile.postgis -t <tag> .
+#
+# Expects the matching .deb from `Dockerfile.build` to be in ./out.
+#
+# Only built for PostgreSQL 18: the postgis/postgis images still ship 19beta1,
+# which is older than the 19 beta PGDG publishes headers for, so a package built
+# against the current beta has no matching PostGIS base to install into. Use
+# Dockerfile.postgres for the 19 beta.
+ARG BASE_IMAGE=postgis/postgis:18-3.6
+
+FROM ${BASE_IMAGE} AS runtime
+
+ARG PG_MAJOR=18
+ARG POSTGIS_VERSION=3.6
 
 LABEL maintainer="Lars Wilhelmsen <lars@sral.org>" \
-    org.opencontainers.image.description=" PostgreSQL 15 bullseye with accumulo_access_pg database extension" \
-    org.opencontainers.image.source="https://github.com/larsw/accumulo_access_pg"
+    org.opencontainers.image.description="PostGIS ${POSTGIS_VERSION} spatial database extension AND accumulo_access_pg with PostgreSQL ${PG_MAJOR}" \
+    org.opencontainers.image.source="https://github.com/larsw/accumulo-access-pg"
 
-ADD out/accumulo_access_bullseye_pg15_0.1.0_amd64.deb /tmp/
-RUN apt install -y /tmp/accumulo_access_bullseye_pg15_0.1.0_amd64.deb
-# Overwrite the file provided by PostGIS with one that includes accumulo_access_pg
-ADD 10_postgis.sh /docker-entrypoint-initdb.d/
+COPY out/accumulo_access_*_pg${PG_MAJOR}_*_amd64.deb /tmp/ext/
+RUN dpkg --install /tmp/ext/*.deb && rm -rf /tmp/ext
 
+# Overwrite the file provided by PostGIS with one that also installs accumulo_access_pg.
+# Sourced (not executed) by docker-entrypoint.sh, so it must stay non-executable.
+COPY 10_postgis.sh /docker-entrypoint-initdb.d/

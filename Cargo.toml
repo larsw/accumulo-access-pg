@@ -1,7 +1,9 @@
 [package]
 name = "accumulo_access_pg"
-version = "0.1.5"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
+resolver = "3"
+rust-version = "1.96"
 authors = ["Lars Wilhelmsen <sral-backwards@sral.org>"]
 description = "PostgreSQL extension for parsing and evaluating Accumulo Access Expressions"
 license = "MIT OR Apache-2.0"
@@ -12,26 +14,27 @@ readme = "README.md"
 crate-type = ["cdylib"]
 
 [features]
-default = ["pg15"]
-# pg11 = ["pgrx/pg11", "pgrx-tests/pg11" ]
-# pg12 = ["pgrx/pg12", "pgrx-tests/pg12" ]
-# pg13 = ["pgrx/pg13", "pgrx-tests/pg13" ]
-# pg14 = ["pgrx/pg14", "pgrx-tests/pg14" ]
+default = ["pg18"]
+pg13 = ["pgrx/pg13", "pgrx-tests/pg13"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
-# pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
+pg19 = ["pgrx/pg19", "pgrx-tests/pg19"]
 pg_test = []
 #jwt = ["jsonwebtoken"]
 
 [dependencies]
 #accumulo-access = { path = "../accumulo-access-rs/accumulo-access", features = ["caching"] } # for local dev
-accumulo-access = "0.1"
-pgrx = "=0.11.4"
+accumulo-access = "0.2"
+pgrx = "=0.19.2"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0"}
+serde_json = { version = "1.0" }
 #jsonwebtoken = { version = "9.3.0", optional = true }
 
 [dev-dependencies]
-pgrx-tests = "=0.11.4"
+pgrx-tests = "=0.19.2"
 
 [profile.dev]
 panic = "unwind"
