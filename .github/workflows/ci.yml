@@ -26,7 +26,7 @@ jobs:
       pg_majors: ${{ steps.read.outputs.pg_majors }}
       pg_beta_majors: ${{ steps.read.outputs.pg_beta_majors }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Read versions.env
         id: read
@@ -51,15 +51,15 @@ jobs:
       matrix:
         pg: ${{ fromJSON(needs.majors.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Built through buildx rather than `./test.sh pgrx` so the toolchain
       # layers (rustup, cargo-pgrx, five Postgres servers) are shared across
       # the matrix instead of rebuilt per major.
       - name: Build toolchain image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile.test
@@ -87,7 +87,7 @@ jobs:
       matrix:
         pg: ${{ fromJSON(needs.majors.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Builds the .deb, installs it into the real server image for this major
       # and runs tests/integration.sql against it.
@@ -96,7 +96,7 @@ jobs:
           PG_MAJOR: ${{ matrix.pg }}
         run: ./test.sh e2e "$PG_MAJOR"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb-pg${{ matrix.pg }}
           path: out/*.deb
