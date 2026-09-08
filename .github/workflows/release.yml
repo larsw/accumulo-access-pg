@@ -1,0 +1,204 @@
+# Builds a .deb of the extension for every PostgreSQL major listed in
+# versions.env and attaches them all to a GitHub release.
+#
+# To release:
+#
+#   1. Bump `version` in Cargo.toml on main (and refresh Cargo.lock).
+#   2. git tag v$VERSION && git push origin v$VERSION
+#
+# The workflow refuses to run if the tag and Cargo.toml disagree. It can also be
+# started from the Actions tab, which tags the current commit for you, and has a
+# dry-run mode that builds and tests everything without tagging or releasing.
+name: Release
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and test every package, but don't tag or create a release"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: Resolve the release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      pg_majors: ${{ steps.resolve.outputs.pg_majors }}
+      pg_beta_majors: ${{ steps.resolve.outputs.pg_beta_majors }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the version and the targeted majors
+        id: resolve
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ -z "$version" ]; then
+            echo "::error::could not read the package version from Cargo.toml"
+            exit 1
+          fi
+
+          # A tag push has to agree with Cargo.toml, otherwise the packages
+          # attached to the release would not be the version the tag names.
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match accumulo_access_pg $version (expected v$version)"
+            exit 1
+          fi
+
+          # shellcheck source=versions.env
+          source ./versions.env
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            # shellcheck disable=SC2086  # deliberate split: one major per line
+            echo "matrix=$(printf '%s\n' $PG_MAJORS | jq -R . | jq -cs .)"
+            echo "pg_majors=$PG_MAJORS"
+            echo "pg_beta_majors=$PG_BETA_MAJORS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing accumulo_access_pg $version as v$version for PostgreSQL $PG_MAJORS"
+
+  pgrx-tests:
+    name: pgrx tests (pg${{ matrix.pg }})
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ${{ fromJSON(needs.meta.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.test
+          tags: accumulo-access-pg-test:latest
+          load: true
+          build-args: |
+            PG_MAJORS=${{ needs.meta.outputs.pg_majors }}
+            PG_BETA_MAJORS=${{ needs.meta.outputs.pg_beta_majors }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: cargo pgrx test pg${{ matrix.pg }}
+        env:
+          PG_MAJOR: ${{ matrix.pg }}
+        run: |
+          docker run --rm -v "$PWD:/work" accumulo-access-pg-test:latest \
+            bash -lc "cargo pgrx test pg${PG_MAJOR}"
+
+  package:
+    name: package + SQL (pg${{ matrix.pg }})
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ${{ fromJSON(needs.meta.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds the .deb and proves it installs and works in a real server
+      # before it is ever attached to a release.
+      - name: Build the package and test it in a real server
+        env:
+          PG_MAJOR: ${{ matrix.pg }}
+        run: ./test.sh e2e "$PG_MAJOR"
+
+      - name: Check the package is named for the release
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          PG_MAJOR: ${{ matrix.pg }}
+        run: |
+          set -euo pipefail
+          deb="$(ls out/accumulo_access_*_pg"${PG_MAJOR}"_"${VERSION}"_amd64.deb)"
+          echo "$deb"
+          dpkg-deb --info "$deb" | sed -n '/^ Package:/p;/^ Version:/p;/^ Pre-Depends:/p'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-pg${{ matrix.pg }}
+          path: out/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Attach the packages to a GitHub release
+    needs: [ meta, pgrx-tests, package ]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the tag and the release, upload the assets
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # release notes are generated from history
+
+      - name: Collect the packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deb-pg*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./*.deb | sed 's#\./##' > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Lets a re-run finish a release whose asset upload failed.
+            echo "::notice::release $TAG exists, replacing its assets"
+            gh release upload "$TAG" dist/* --clobber
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes dist/*
+          else
+            # Started by hand: tag this commit as part of creating the release.
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes dist/*
+          fi
+
+      - name: Summary
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PG_MAJORS: ${{ needs.meta.outputs.pg_majors }}
+        run: |
+          {
+            echo "## accumulo_access_pg $VERSION"
+            echo
+            echo "PostgreSQL majors: $PG_MAJORS"
+            echo
+            echo "<https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG>"
+            echo
+            echo '| package | sha256 |'
+            echo '| --- | --- |'
+            while read -r sum name; do
+              echo "| \`$name\` | \`$sum\` |"
+            done < dist/SHA256SUMS
+          } >> "$GITHUB_STEP_SUMMARY"

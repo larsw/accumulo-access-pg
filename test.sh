@@ -3,30 +3,49 @@
 # Integration tests for accumulo_access_pg against every PostgreSQL major it
 # targets. Everything runs in Docker, so no local Postgres or pgrx is needed.
 #
-#   ./test.sh          # both stages
-#   ./test.sh pgrx     # #[pg_test] suite, in-backend, per major
-#   ./test.sh e2e      # install the .deb into a real server image and run SQL
+#   ./test.sh              # both stages, every major in versions.env
+#   ./test.sh pgrx         # in-backend #[pg_test] suite, every major
+#   ./test.sh pgrx 18      # ...just pg18
+#   ./test.sh e2e 18 19    # install the .deb into real server images and run SQL
 set -euo pipefail
 
 cd "$(dirname "$0")"
 # shellcheck source=versions.env
 source ./versions.env
 
-stage="${1:-all}"
+stage="all"
+if [ "$#" -gt 0 ] && [[ ! "$1" =~ ^[0-9]+$ ]]; then
+    stage="$1"
+    shift
+fi
+
+read -r -a all_majors <<< "$PG_MAJORS"
+if [ "$#" -gt 0 ]; then
+    majors=("$@")
+    for major in "${majors[@]}"; do
+        # shellcheck disable=SC2076
+        if [[ ! " ${all_majors[*]} " =~ " ${major} " ]]; then
+            echo "unknown major '$major'; versions.env lists: $PG_MAJORS" >&2
+            exit 2
+        fi
+    done
+else
+    majors=("${all_majors[@]}")
+fi
 
 run_pgrx_tests() {
-    echo "==> building ${IMAGE_TOOLCHAIN} (PostgreSQL ${PG_STABLE} + ${PG_BETA}, pgrx ${PGRX_VERSION})"
+    echo "==> building ${IMAGE_TOOLCHAIN} (PostgreSQL ${PG_MAJORS}, pgrx ${PGRX_VERSION})"
     docker build -f Dockerfile.test \
         --build-arg "PGRX_VERSION=${PGRX_VERSION}" \
-        --build-arg "PG_STABLE=${PG_STABLE}" \
-        --build-arg "PG_BETA=${PG_BETA}" \
+        --build-arg "PG_MAJORS=${PG_MAJORS}" \
+        --build-arg "PG_BETA_MAJORS=${PG_BETA_MAJORS}" \
         -t "${IMAGE_TOOLCHAIN}" .
 
     # Named volumes keep the cargo registry and target dir out of the work tree.
     docker volume create aapg-target >/dev/null
     docker volume create aapg-registry >/dev/null
 
-    for major in "${PG_STABLE}" "${PG_BETA}"; do
+    for major in "${majors[@]}"; do
         echo "==> cargo pgrx test pg${major}"
         docker run --rm \
             -v "$PWD:/work" \
@@ -41,6 +60,7 @@ run_pgrx_tests() {
 run_sql_suite() {
     local image="$1" label="$2"
     local container="aapg-e2e-$$-${label}"
+    local rc=0 ready=""
 
     echo "==> ${label}: ${image}"
     docker run -d --name "$container" \
@@ -48,10 +68,8 @@ run_sql_suite() {
         -e POSTGRES_DB=accumulo \
         "$image" >/dev/null
 
-    local rc=0
     # During initdb the entrypoint's temporary server listens on the unix socket
     # only, so TCP is what tells us the real server is up.
-    local ready=""
     for _ in $(seq 1 120); do
         if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d accumulo -q; then
             ready=yes
@@ -75,17 +93,26 @@ run_sql_suite() {
 }
 
 run_e2e_tests() {
-    ./build.sh
-    run_sql_suite "${IMAGE_POSTGRES}:${PG_STABLE_IMAGE#postgres:}" "pg${PG_STABLE}"
-    run_sql_suite "${IMAGE_POSTGRES}:${PG_BETA_IMAGE#postgres:}" "pg${PG_BETA}"
-    run_sql_suite "${IMAGE_POSTGIS}:${POSTGIS_TAG}" "postgis-pg${PG_STABLE}"
+    ./build.sh "${majors[@]}"
+
+    for major in "${majors[@]}"; do
+        base_var="PG_IMAGE_${major}"
+        base="${!base_var}"
+        run_sql_suite "${IMAGE_POSTGRES}:${base#postgres:}" "pg${major}"
+
+        postgis_var="POSTGIS_IMAGE_${major}"
+        postgis="${!postgis_var:-}"
+        if [ -n "$postgis" ]; then
+            run_sql_suite "${IMAGE_POSTGIS}:${postgis#postgis/postgis:}" "postgis-pg${major}"
+        fi
+    done
 }
 
 case "$stage" in
     pgrx) run_pgrx_tests ;;
     e2e)  run_e2e_tests ;;
     all)  run_pgrx_tests; run_e2e_tests ;;
-    *)    echo "usage: $0 [pgrx|e2e|all]" >&2; exit 2 ;;
+    *)    echo "usage: $0 [pgrx|e2e|all] [major...]" >&2; exit 2 ;;
 esac
 
 echo

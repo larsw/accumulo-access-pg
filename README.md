@@ -8,18 +8,26 @@ The development wouldn't have been possible without the excellent [pgrx project]
 
 ## Supported PostgreSQL versions
 
-Built and integration-tested against:
+A package is built, and the full test suite run, for every major below. The
+list lives in [`versions.env`](versions.env).
 
-| PostgreSQL | Cargo feature | Status                                          |
-|------------|---------------|-------------------------------------------------|
-| 18.6       | `pg18`        | default                                         |
-| 19beta3    | `pg19`        | beta — tracks the newest beta PGDG publishes    |
-| 13 – 17    | `pg13`…`pg17` | supported by pgrx, not covered by CI            |
+| PostgreSQL | Cargo feature | Package                                  |
+|------------|---------------|------------------------------------------|
+| 15.19      | `pg15`        | `accumuloaccess-pg15`                    |
+| 16.15      | `pg16`        | `accumuloaccess-pg16`                    |
+| 17.11      | `pg17`        | `accumuloaccess-pg17`                    |
+| 18.6       | `pg18`        | `accumuloaccess-pg18` — **default**      |
+| 19beta3    | `pg19`        | `accumuloaccess-pg19` — beta             |
+| 13 – 14    | `pg13`, `pg14`| supported by pgrx, not built or tested   |
+
+The 19 packages come from PGDG's `-testing` suite, which carries a newer beta
+than pgrx' own vendored source download.
 
 Only one `pgNN` feature may be enabled at a time, and `pg18` is the default:
 
 ```bash
 cargo build --release                                  # pg18
+cargo build --release --no-default-features -F pg15    # pg15
 cargo build --release --no-default-features -F pg19    # pg19beta3
 ```
 
@@ -27,7 +35,27 @@ Toolchain: pgrx `0.19.2`, Rust edition 2024 (rustc 1.96 or newer).
 
 ## Installation
 
+### Debian packages
+
+Every release attaches a package per major, plus a `SHA256SUMS`, to its
+[GitHub release](https://github.com/larsw/accumulo-access-pg/releases):
+
+```bash
+sudo dpkg -i accumulo_access_trixie_pg18_0.2.0_amd64.deb
+```
+
+They are built for Debian trixie / amd64 and pre-depend on the matching
+`postgresql-NN`. To build them yourself:
+
+```bash
+./build.sh          # every major, into out/
+./build.sh 17 18    # just these
+```
+
 ### Docker images
+
+`build.sh` also builds a runtime image per major, which is what the end-to-end
+tests install the packages into. They are not published to a registry:
 
 ```bash
 docker run -e POSTGRES_PASSWORD=secret larsw/postgres-accumulo-access:18-trixie
@@ -36,17 +64,13 @@ docker run -e POSTGRES_PASSWORD=secret larsw/postgis-accumulo-access:18-3.6
 ```
 
 The images create the extension in `$POSTGRES_DB` and in a `template_accumulo_access`
-(or `template_postgis`) template database on first start.
+(or `template_postgis`) template database on first start. `latest` follows the
+default major, never a beta.
 
-PostGIS is offered for PostgreSQL 18 only: the `postgis/postgis` images still ship
-19beta1, which is older than the beta this extension is built against.
-
-### Debian packages
-
-```bash
-./build.sh                                   # writes out/*.deb and builds the images
-sudo dpkg -i out/accumulo_access_trixie_pg18_*_amd64.deb
-```
+The PostGIS variant is built for the default major only: the extension is the same
+package on every base, so the other majors would only re-test PostGIS' own
+packaging. There is none for 19 — `postgis/postgis` still ships 19beta1, which is
+older than the beta this extension is built against.
 
 ### From source
 
@@ -122,19 +146,47 @@ select * from secret_stuff;
 ## Development
 
 Everything runs in Docker, so no local PostgreSQL or pgrx install is required.
-The targeted versions live in [`versions.env`](versions.env).
+The targeted versions live in [`versions.env`](versions.env), and both scripts
+take an optional list of majors.
 
 ```bash
-./test.sh          # both stages below
-./test.sh pgrx     # in-backend #[pg_test] suite, against PG 18 and the 19 beta
-./test.sh e2e      # build the .debs, install them into real server images,
-                   # then run tests/integration.sql against each
-./build.sh         # packages and images only
+./test.sh              # both stages, every major
+./test.sh pgrx         # in-backend #[pg_test] suite
+./test.sh pgrx 18      # ...just pg18
+./test.sh e2e 18 19    # build the .debs, install them into real server images,
+                       # then run tests/integration.sql against each
+./build.sh             # packages and images only
 ```
 
-`./test.sh pgrx` builds [`Dockerfile.test`](Dockerfile.test), which installs both
-PostgreSQL majors from PGDG (the 19 beta comes from the `-testing` suite, which is
-ahead of the source tarball pgrx would download) and registers both with pgrx.
+`./test.sh pgrx` builds [`Dockerfile.test`](Dockerfile.test), which installs every
+targeted PostgreSQL major from PGDG and registers each with pgrx, so one image
+covers the whole range.
+
+CI ([`ci.yml`](.github/workflows/ci.yml)) runs both stages as a matrix over the
+same majors, reading the list from `versions.env` so it cannot drift from a local
+run.
+
+## Releasing
+
+[`release.yml`](.github/workflows/release.yml) builds a package per major and
+attaches them all, plus a `SHA256SUMS`, to a GitHub release. Nothing is pushed to
+crates.io or a container registry.
+
+1. Bump `version` in `Cargo.toml` on `main` and refresh `Cargo.lock`.
+2. Tag the commit and push the tag:
+
+   ```bash
+   git tag v0.2.0 && git push origin v0.2.0
+   ```
+
+The workflow refuses to run if the tag and `Cargo.toml` disagree. Every package is
+installed into a real server and put through `tests/integration.sql` before it is
+attached to anything.
+
+It can also be started from the Actions tab, which tags the current commit for you
+and offers a dry-run mode that builds and tests everything without releasing.
+Re-running it for an existing release replaces the assets, which is how to recover
+a release whose upload failed part way.
 
 ## TODO
 
