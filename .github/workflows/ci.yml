@@ -1,0 +1,103 @@
+# Tests every PostgreSQL major listed in versions.env, twice over: the
+# in-backend #[pg_test] suite, and the packaged extension installed into a real
+# server image. Same entry points as a local `./test.sh`, so the two can't drift.
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  # versions.env is the single source of truth for which majors are targeted,
+  # so read the list here instead of repeating it in each matrix below.
+  majors:
+    name: Read targeted majors
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+      pg_majors: ${{ steps.read.outputs.pg_majors }}
+      pg_beta_majors: ${{ steps.read.outputs.pg_beta_majors }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read versions.env
+        id: read
+        run: |
+          set -euo pipefail
+          # shellcheck source=versions.env
+          source ./versions.env
+          {
+            # shellcheck disable=SC2086  # deliberate split: one major per line
+            echo "matrix=$(printf '%s\n' $PG_MAJORS | jq -R . | jq -cs .)"
+            echo "pg_majors=$PG_MAJORS"
+            echo "pg_beta_majors=$PG_BETA_MAJORS"
+          } >> "$GITHUB_OUTPUT"
+          echo "PostgreSQL majors: $PG_MAJORS (beta: ${PG_BETA_MAJORS:-none})"
+
+  pgrx-tests:
+    name: pgrx tests (pg${{ matrix.pg }})
+    needs: majors
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ${{ fromJSON(needs.majors.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built through buildx rather than `./test.sh pgrx` so the toolchain
+      # layers (rustup, cargo-pgrx, five Postgres servers) are shared across
+      # the matrix instead of rebuilt per major.
+      - name: Build toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.test
+          tags: accumulo-access-pg-test:latest
+          load: true
+          build-args: |
+            PG_MAJORS=${{ needs.majors.outputs.pg_majors }}
+            PG_BETA_MAJORS=${{ needs.majors.outputs.pg_beta_majors }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: cargo pgrx test pg${{ matrix.pg }}
+        env:
+          PG_MAJOR: ${{ matrix.pg }}
+        run: |
+          docker run --rm -v "$PWD:/work" accumulo-access-pg-test:latest \
+            bash -lc "cargo pgrx test pg${PG_MAJOR}"
+
+  package:
+    name: package + SQL (pg${{ matrix.pg }})
+    needs: majors
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ${{ fromJSON(needs.majors.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds the .deb, installs it into the real server image for this major
+      # and runs tests/integration.sql against it.
+      - name: Build the package and test it in a real server
+        env:
+          PG_MAJOR: ${{ matrix.pg }}
+        run: ./test.sh e2e "$PG_MAJOR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-pg${{ matrix.pg }}
+          path: out/*.deb
+          if-no-files-found: error
