@@ -23,6 +23,15 @@ list lives in [`versions.env`](versions.env).
 The 19 packages come from PGDG's `-testing` suite, which carries a newer beta
 than pgrx' own vendored source download.
 
+Stable majors look after themselves — both `postgresql-NN` and the
+`postgres:NN-trixie` tag float to the newest minor. A beta has to be pinned
+exactly, so
+[`check-postgres-versions.yml`](.github/workflows/check-postgres-versions.yml)
+runs weekly and opens an issue when PGDG publishes a newer beta, when the major
+reaches general availability, or when the pinned beta disappears (which would
+otherwise surface only as an apt error mid-build). Run it by hand with
+`./.github/scripts/check-postgres-versions.sh`.
+
 Only one `pgNN` feature may be enabled at a time, and `pg18` is the default:
 
 ```bash
