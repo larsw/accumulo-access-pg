@@ -2,18 +2,17 @@
 #
 # Toolchain image for building and integration-testing accumulo_access_pg.
 #
-# It installs both PostgreSQL majors the extension targets, straight from PGDG:
-#   * PostgreSQL 18.x     -> trixie-pgdg, component "main"
-#   * PostgreSQL 19 beta  -> trixie-pgdg-testing, component "19"
-#
-# and registers both with pgrx, so `cargo pgrx test pg18` / `cargo pgrx test pg19`
-# exercise the real server builds rather than pgrx' own vendored source download
-# (which lags the newest 19 beta).
+# It installs every PostgreSQL major the extension targets, straight from PGDG,
+# and registers each with pgrx, so `cargo pgrx test pg15` .. `cargo pgrx test
+# pg19` all run against real server builds. Stable majors come from the -pgdg
+# suite; betas come from -pgdg-testing, which carries a newer beta than pgrx'
+# own vendored source download.
 FROM debian:trixie-slim
 
 ARG PGRX_VERSION=0.19.2
-ARG PG_STABLE=18
-ARG PG_BETA=19
+# Space-separated, and betas must also be listed in PG_BETA_MAJORS.
+ARG PG_MAJORS="15 16 17 18 19"
+ARG PG_BETA_MAJORS="19"
 ARG USER=pgrx
 ARG UID=1000
 ARG GID=1000
@@ -30,8 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN useradd -m -u ${UID} ${USER}
 
-# Rust + cargo-pgrx first: these layers are the expensive ones and are
-# independent of which Postgres majors we go on to install.
+# Rust and cargo-pgrx first: these are the expensive layers and they don't
+# depend on which Postgres majors we go on to install.
 USER ${UID}:${GID}
 WORKDIR /home/${USER}
 ENV PATH="/home/${USER}/.cargo/bin:${PATH}" \
@@ -42,39 +41,52 @@ RUN cargo install cargo-pgrx --version ${PGRX_VERSION} --locked
 
 USER root
 
-# Don't let the postgresql-common maintainer scripts spin up a cluster we never use.
+# Don't let the postgresql-common maintainer scripts spin up clusters we never use.
 RUN install -d /etc/postgresql-common \
     && echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.conf
 
-# PG18 and the PG19 beta disagree about libpq: postgresql-client-19 wants
-# libpq5 (>= 19~beta3), which only lives in the -testing suite. The newer
-# libpq also satisfies PG18's client, so pin the shared libpq packages there.
-RUN install -d /usr/share/postgresql-common/pgdg \
-    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt trixie-pgdg main" \
-         > /etc/apt/sources.list.d/pgdg.list \
-    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt trixie-pgdg-testing ${PG_BETA}" \
-         > /etc/apt/sources.list.d/pgdg-testing.list \
-    && printf 'Package: libpq5 libpq-dev libpq-oauth\nPin: release n=trixie-pgdg-testing\nPin-Priority: 1001\n' \
-         > /etc/apt/preferences.d/pgdg-libpq \
-    && apt-get update && apt-get install -y --no-install-recommends \
-         postgresql-${PG_STABLE} postgresql-server-dev-${PG_STABLE} \
-         postgresql-${PG_BETA}   postgresql-server-dev-${PG_BETA} \
-    && rm -rf /var/lib/apt/lists/*
+# A beta's client wants a newer libpq5 than the stable suite ships, and the two
+# can't coexist. The newer libpq also satisfies the stable clients, so pin the
+# shared libpq packages to the -testing suite whenever a beta is in the mix.
+RUN set -eux; \
+    install -d /usr/share/postgresql-common/pgdg; \
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; \
+    key=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; \
+    echo "deb [signed-by=$key] http://apt.postgresql.org/pub/repos/apt trixie-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    if [ -n "${PG_BETA_MAJORS}" ]; then \
+      : > /etc/apt/sources.list.d/pgdg-testing.list; \
+      for major in ${PG_BETA_MAJORS}; do \
+        echo "deb [signed-by=$key] http://apt.postgresql.org/pub/repos/apt trixie-pgdg-testing $major" \
+          >> /etc/apt/sources.list.d/pgdg-testing.list; \
+      done; \
+      printf 'Package: libpq5 libpq-dev libpq-oauth\nPin: release n=trixie-pgdg-testing\nPin-Priority: 1001\n' \
+        > /etc/apt/preferences.d/pgdg-libpq; \
+    fi; \
+    packages=""; \
+    for major in ${PG_MAJORS}; do \
+      packages="$packages postgresql-$major postgresql-server-dev-$major"; \
+    done; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends $packages; \
+    rm -rf /var/lib/apt/lists/*
 
-# `cargo pgrx test` installs the extension into the server's own lib/extension
-# directories, so they have to be writable by the unprivileged build user.
-RUN for major in ${PG_STABLE} ${PG_BETA}; do \
+# `cargo pgrx test` installs the extension into each server's own lib and
+# extension directories, so they have to be writable by the build user.
+RUN for major in ${PG_MAJORS}; do \
       chown -R ${UID}:${GID} \
         /usr/lib/postgresql/$major/lib \
         /usr/share/postgresql/$major/extension ; \
     done
 
 USER ${UID}:${GID}
-RUN cargo pgrx init \
-      --pg${PG_STABLE}=/usr/lib/postgresql/${PG_STABLE}/bin/pg_config \
-      --pg${PG_BETA}=/usr/lib/postgresql/${PG_BETA}/bin/pg_config
+RUN set -eux; \
+    args=""; \
+    for major in ${PG_MAJORS}; do \
+      args="$args --pg$major=/usr/lib/postgresql/$major/bin/pg_config"; \
+    done; \
+    cargo pgrx init $args
 
 # pgrx-tests reads $USER to pick the role it connects to the test cluster as,
 # and a numeric `USER` directive leaves it unset. Declared last so it doesn't
