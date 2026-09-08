@@ -1,0 +1,152 @@
+# Watches PGDG for a beta newer than the one versions.env pins, and opens an
+# issue when there is one.
+#
+# Stable majors look after themselves: `postgresql-NN` and `postgres:NN-trixie`
+# both float to the newest minor. A beta has to be pinned exactly, so it goes
+# stale quietly, and once PGDG drops the old beta the package build fails with
+# an apt error rather than anything self-explanatory.
+name: Check PostgreSQL versions
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"  # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check the pinned beta versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare versions.env against PGDG
+        id: check
+        run: |
+          set -euo pipefail
+          ./.github/scripts/check-postgres-versions.sh findings.tsv | tee report.txt
+          {
+            echo '## PostgreSQL version check'
+            echo
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue for anything that moved
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: postgres-versions
+        run: |
+          set -euo pipefail
+          # For DEBIAN_CODENAME, which the suite names and image tags below use.
+          # shellcheck source=versions.env
+          source ./versions.env
+
+          if [ ! -s findings.tsv ]; then
+            echo "Beta pins are current, nothing to report."
+            exit 0
+          fi
+
+          gh label create "$LABEL" \
+            --description "Automated PostgreSQL version checks" \
+            --color BFD4F2 >/dev/null 2>&1 || true
+
+          # Titles are deterministic per version, so an issue is opened once per
+          # version and never reopened after it has been dealt with or declined.
+          existing="$(gh issue list --state all --label "$LABEL" \
+            --limit 200 --json title --jq '.[].title')"
+
+          while IFS=$'\t' read -r major kind pinned available image_tag image_ok; do
+            case "$kind" in
+              newer)
+                title="PostgreSQL ${major}: PGDG has ${available} (pinned ${pinned})"
+                ;;
+              released)
+                title="PostgreSQL ${major}: released as ${available}, drop it from PG_BETA_MAJORS"
+                ;;
+              gone)
+                title="PostgreSQL ${major}: ${pinned} is no longer published by PGDG"
+                ;;
+              *)
+                echo "::warning::unknown finding kind '${kind}' for major ${major}"
+                continue
+                ;;
+            esac
+
+            if grep -Fxq "$title" <<< "$existing"; then
+              echo "already tracked: $title"
+              continue
+            fi
+
+            {
+              case "$kind" in
+                newer)
+                  echo "PGDG's \`${DEBIAN_CODENAME}-pgdg-testing\` suite now carries **${available}**"
+                  echo "for PostgreSQL ${major}, but \`versions.env\` pins **${pinned}**."
+                  echo
+                  echo "To move:"
+                  echo
+                  echo '```diff'
+                  echo "-PG_IMAGE_${major}=postgres:${pinned}-${DEBIAN_CODENAME}"
+                  echo "+PG_IMAGE_${major}=postgres:${image_tag}"
+                  echo '```'
+                  echo
+                  if [ "$image_ok" = "yes" ]; then
+                    echo "\`postgres:${image_tag}\` is published, so the end-to-end tests can follow straight away."
+                  else
+                    echo "⚠️ \`postgres:${image_tag}\` is **not published yet**. The package would build against"
+                    echo "${available}, but the end-to-end tests have no matching base image to install it into."
+                    echo "Wait for the image, or expect that stage to fail."
+                  fi
+                  ;;
+                released)
+                  echo "PostgreSQL ${major} is out of beta: PGDG's stable suite has **${available}**."
+                  echo
+                  if [ "${pinned}-${DEBIAN_CODENAME}" != "${image_tag}" ]; then
+                    echo "To move:"
+                    echo
+                    echo '```diff'
+                    echo "-PG_IMAGE_${major}=postgres:${pinned}-${DEBIAN_CODENAME}"
+                    echo "+PG_IMAGE_${major}=postgres:${image_tag}"
+                    echo '```'
+                    echo
+                    echo "and drop \`${major}\` from \`PG_BETA_MAJORS\`, which stops the build pulling it from"
+                    echo "the \`-testing\` suite and lets the tag float to the newest minor like the other"
+                    echo "stable majors."
+                  else
+                    echo "\`PG_IMAGE_${major}\` already points at the floating stable tag; all that is left is"
+                    echo "dropping \`${major}\` from \`PG_BETA_MAJORS\`, which stops the build pulling it from"
+                    echo "the \`-testing\` suite."
+                  fi
+                  echo
+                  echo "A PostGIS base image for ${major} may also exist now; if so it can be added as"
+                  echo "\`POSTGIS_IMAGE_${major}\`."
+                  ;;
+                gone)
+                  echo "\`postgresql-${major}\` (**${pinned}**) is in neither the stable nor the \`-testing\`"
+                  echo "PGDG suite any more, so the package build for this major **will fail**."
+                  echo
+                  echo "Either move the pin to whatever PGDG publishes now, or drop ${major} from"
+                  echo "\`PG_MAJORS\` and \`PG_BETA_MAJORS\`."
+                  ;;
+              esac
+              echo
+              echo '<details><summary>Full report</summary>'
+              echo
+              echo '```'
+              cat report.txt
+              echo '```'
+              echo
+              echo '</details>'
+              echo
+              echo "_Opened by [\`check-postgres-versions\`](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/check-postgres-versions.yml)._"
+            } > body.md
+
+            gh issue create --title "$title" --label "$LABEL" --body-file body.md
+          done < findings.tsv
