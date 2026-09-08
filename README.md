@@ -36,7 +36,7 @@ alter table secret_stuff enable row level security;
 insert into secret_stuff(data, authz_expr) values('pretty secret', 'label1');
 insert into secret_stuff(data, authz_expr) values('moar secret', 'label1|label2');
 insert into secret_stuff(data, authz_expr) values('wat', 'label2');
-insert into secret_stuff(data, authz_expr) values('win', 'label2 & (label3 | label4)');
+insert into secret_stuff(data, authz_expr) values('win', 'label2&(label3|label4)');
 
 grant select on secret_stuff to users;
 
@@ -64,7 +64,7 @@ select * from secret_stuff;
 ------+-------------+----------------------------
 --  2 | moar secret | label1|label2
 --  3 | wat         | label2
---  4 | win         | label2 & (label3 | label4)
+--  4 | win         | label2&(label3|label4)
 -- (3 rows)
 ```
 
