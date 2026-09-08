@@ -1,55 +1,96 @@
-FROM debian:bullseye-slim AS build
+# syntax=docker/dockerfile:1
+#
+# Builds a .deb of accumulo_access_pg for a single PostgreSQL major.
+#
+#   docker build -f Dockerfile.build --build-arg PG_MAJOR=18 -o out .
+#   docker build -f Dockerfile.build --build-arg PG_MAJOR=19 -o out .
+#
+# The resulting package lands in ./out and is named after the version in
+# Cargo.toml, so nothing here needs touching on a release.
+ARG DEBIAN_CODENAME=trixie
+
+FROM debian:${DEBIAN_CODENAME}-slim AS build
+
+ARG DEBIAN_CODENAME=trixie
+ARG PG_MAJOR=18
+ARG PGRX_VERSION=0.19.2
 ARG USER=docker
 ARG UID=1000
 ARG GID=1000
+ARG MAINTAINER="Lars Wilhelmsen <lars@sral.org>"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl wget gnupg git \
+      build-essential gcc make pkg-config \
+      clang libclang-dev \
+      libssl-dev zlib1g-dev liblz4-dev libzstd-dev libreadline-dev libicu-dev \
+      ruby ruby-dev libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN gem install --no-document fpm
 
 RUN useradd -m ${USER} --uid=${UID}
 
-ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y wget gnupg
-RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ bullseye-pgdg main" >> /etc/apt/sources.list.d/pgdg.list
-RUN wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-
-RUN apt-get update && apt-get install -y git curl
-RUN apt-get update && apt-get install -y gcc make build-essential libz-dev zlib1g-dev strace libssl-dev pkg-config
-
-RUN apt-get update && apt-get install -y postgresql-15 postgresql-server-dev-15
-RUN apt-get update && apt-get install -y ruby ruby-dev rubygems build-essential
-RUN gem install dotenv -v 2.8.1
-RUN gem install --no-document fpm
+# PGDG. Betas (19+) live in the -testing suite, under a per-major component,
+# and drag in a newer libpq than the stable suite ships.
+RUN install -d /usr/share/postgresql-common/pgdg /etc/postgresql-common \
+    && echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.conf \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt ${DEBIAN_CODENAME}-pgdg main" \
+         > /etc/apt/sources.list.d/pgdg.list \
+    && if [ "${PG_MAJOR}" -ge 19 ]; then \
+         echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt ${DEBIAN_CODENAME}-pgdg-testing ${PG_MAJOR}" \
+           > /etc/apt/sources.list.d/pgdg-testing.list ; \
+         printf 'Package: libpq5 libpq-dev libpq-oauth\nPin: release n=%s-pgdg-testing\nPin-Priority: 1001\n' "${DEBIAN_CODENAME}" \
+           > /etc/apt/preferences.d/pgdg-libpq ; \
+       fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
+         postgresql-${PG_MAJOR} postgresql-server-dev-${PG_MAJOR} \
+    && rm -rf /var/lib/apt/lists/*
 
 USER ${UID}:${GID}
 WORKDIR /home/${USER}
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 ENV PATH="/home/${USER}/.cargo/bin:${PATH}"
 
-RUN cargo install cargo-pgrx
-RUN cargo pgrx init \
-    --pg15=/usr/lib/postgresql/15/bin/pg_config
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --default-toolchain stable --profile minimal
+RUN cargo install cargo-pgrx --version ${PGRX_VERSION} --locked
+RUN cargo pgrx init --pg${PG_MAJOR}=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
 
 RUN mkdir -p accumulo-access-pg/src/
-ADD accumulo_access_pg.control Cargo.toml Cargo.lock accumulo-access-pg/
-ADD src/* accumulo-access-pg/src/
+COPY accumulo_access_pg.control Cargo.toml Cargo.lock accumulo-access-pg/
+COPY src/ accumulo-access-pg/src/
 
 WORKDIR /home/${USER}/accumulo-access-pg
-RUN cargo build --profile artifacts
-RUN cargo pgrx package --profile artifacts -c /usr/bin/pg_config
-RUN cd target/artifacts/accumulo_access_pg-pg15 && \
+RUN cargo pgrx package \
+      --profile artifacts \
+      --no-default-features --features pg${PG_MAJOR} \
+      -c /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
+
+USER root
+RUN set -eu; \
+    version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"; \
+    mkdir -p /out; \
+    cd "target/artifacts/accumulo_access_pg-pg${PG_MAJOR}"; \
     fpm \
-    -s dir \
-    -t deb \
-    -n accumuloaccess-pg15 \
-    -v 0.1.3 \
-    --deb-pre-depends postgresql-15 \
-    -m "Lars Wilhelmsen <lars@sral.org>" \
-    --vendor "Lars Wilhelmsen <lars@sral.org>" \
-    --url "https://github.com/larsw/accumulo-access-pg" \
-    --license "Apache or MIT" \
-    --description "An extension providing Accumulo Access security expressions support for PostgreSQL." \
-    --deb-no-default-config-files \
-    -p /tmp/accumulo_access_bullseye_pg15_0.1.0_amd64.deb \
-    -a amd64 \
-    .
+      -s dir \
+      -t deb \
+      -n "accumuloaccess-pg${PG_MAJOR}" \
+      -v "$version" \
+      --deb-pre-depends "postgresql-${PG_MAJOR}" \
+      -m "${MAINTAINER}" \
+      --vendor "${MAINTAINER}" \
+      --url "https://github.com/larsw/accumulo-access-pg" \
+      --license "Apache-2.0 OR MIT" \
+      --description "An extension providing Accumulo Access security expressions support for PostgreSQL." \
+      --deb-no-default-config-files \
+      -p "/out/accumulo_access_${DEBIAN_CODENAME}_pg${PG_MAJOR}_${version}_amd64.deb" \
+      -a amd64 \
+      .
 
 FROM scratch
-COPY --from=build /tmp/accumulo_access_bullseye_pg15_0.1.0_amd64.deb /
+COPY --from=build /out/ /
