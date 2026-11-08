@@ -1,6 +1,6 @@
 [package]
 name = "accumulo_access_pg"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 resolver = "3"
 rust-version = "1.96"
@@ -27,7 +27,7 @@ pg_test = []
 
 [dependencies]
 #accumulo-access = { path = "../accumulo-access-rs/accumulo-access", features = ["caching"] } # for local dev
-accumulo-access = "0.2"
+accumulo-access = "0.3"
 pgrx = "=0.19.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
