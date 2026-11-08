@@ -4,12 +4,11 @@ version = 4
 
 [[package]]
 name = "accumulo-access"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9cd448394698fa6f93d480bcdfa744ea9883a0fa1e7d81f29024062742d886e"
+checksum = "8030710706576b24df755f2c4b56e03b565d7e44dc5f181cf357e6fb3786b77c"
 dependencies = [
  "cached",
- "serde",
  "serde_json",
  "thiserror",
 ]

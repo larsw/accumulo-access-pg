@@ -300,6 +300,50 @@ mod tests {
         Spi::get_one::<bool>("SELECT sec_authz_check('()', 'label1')").expect("SPI failed");
     }
 
+    /// Since accumulo-access 0.3.0. Before, an unterminated quoted token read as the token
+    /// `label1`.
+    #[pg_test(
+        error = "Error parsing expression: Unterminated quoted access token starting at position 1"
+    )]
+    fn test_unterminated_quoted_token_raises() {
+        Spi::get_one::<bool>("SELECT sec_authz_check('\"label1', 'label1')").expect("SPI failed");
+    }
+
+    /// Since accumulo-access 0.3.0. Before, the empty token matched the empty field of a token
+    /// list such as `label1,`, so this granted access.
+    #[pg_test(error = "Error parsing expression: Unexpected character '\"' at position 2")]
+    fn test_empty_quoted_token_raises() {
+        Spi::get_one::<bool>("SELECT sec_authz_check('\"\"|label9', 'label1,')")
+            .expect("SPI failed");
+    }
+
+    /// Since accumulo-access 0.3.0, parentheses nest at most 256 deep. Without a limit, deep
+    /// nesting overflows the recursive parser's stack, which aborts the backend instead of
+    /// raising an error.
+    #[pg_test(error = "Error parsing expression: Unexpected token: (")]
+    fn test_deep_nesting_raises() {
+        Spi::get_one::<bool>("SELECT sec_authz_check(repeat('(', 100000) || 'label1', 'label1')")
+            .expect("SPI failed");
+    }
+
+    #[pg_test]
+    fn test_nesting_256_deep_is_allowed() {
+        let granted = Spi::get_one::<bool>(
+            "SELECT sec_authz_check(repeat('(', 256) || 'label1' || repeat(')', 256), 'label1')",
+        )
+        .expect("SPI failed");
+        assert_eq!(Some(true), granted);
+    }
+
+    /// Since accumulo-access 0.3.0, which follows the January 2026 specification.
+    #[pg_test]
+    fn test_control_characters_in_quoted_tokens() {
+        let granted =
+            Spi::get_one::<bool>(r#"SELECT sec_authz_check(E'"tab\there"', E'tab\there')"#)
+                .expect("SPI failed");
+        assert_eq!(Some(true), granted);
+    }
+
     /// Guards the version the extension actually got loaded into.
     #[pg_test]
     fn test_running_on_expected_postgres_major() {

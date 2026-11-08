@@ -95,7 +95,8 @@ CREATE EXTENSION accumulo_access_pg;
 | `sec_authz_clear_cache()`                           | `boolean` | Empty the evaluation cache                                  |
 
 `sec_authz_check` returns `false` for a `NULL` or empty expression or token list, and
-raises an error if the expression doesn't parse.
+raises an error if the expression doesn't parse. Parentheses may nest at most 256 deep, so
+a deeper expression raises an error rather than exhausting the backend's stack.
 
 ### Example with Row Level Security
 

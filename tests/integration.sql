@@ -29,6 +29,10 @@ BEGIN
     ASSERT NOT sec_authz_check('label1', NULL), 'NULL tokens must deny';
     ASSERT NOT sec_authz_check('', 'label1'), 'empty expression must deny';
     ASSERT NOT sec_authz_check('label1', ''), 'empty tokens must deny';
+    ASSERT sec_authz_check(E'"tab\there"', E'tab\there'),
+        'control characters are allowed in quoted tokens';
+    ASSERT sec_authz_check(repeat('(', 256) || 'label1' || repeat(')', 256), 'label1'),
+        'nesting 256 deep is allowed';
 END
 $$;
 
@@ -52,7 +56,8 @@ $$;
 
 -- A malformed expression has to surface as a Postgres ERROR rather than unwind
 -- into the backend, quietly return false, or get reinterpreted as something
--- valid. Every form below was silently accepted before accumulo-access 0.2.0.
+-- valid. Every form below was silently accepted before accumulo-access 0.2.0,
+-- except the last five, which were accepted before 0.3.0.
 DO $$
 DECLARE
     bad text;
@@ -70,7 +75,12 @@ BEGIN
         'label1)',                -- unbalanced close
         '()',                     -- empty scope
         '(())',
-        'label1&label2|label3'    -- mixed operators in one scope
+        'label1&label2|label3',   -- mixed operators in one scope
+        '"label1',                -- unterminated quoted token
+        '"label1\',
+        '""|label9',              -- empty quoted token
+        repeat('(', 257) || 'label1' || repeat(')', 257),  -- nested deeper than 256
+        repeat('(', 100000)       -- deep enough to overflow the stack without a limit
     ] LOOP
         message := NULL;
         BEGIN
