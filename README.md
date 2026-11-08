@@ -41,7 +41,7 @@ Every release attaches a package per major, plus a `SHA256SUMS`, to its
 [GitHub release](https://github.com/larsw/accumulo-access-pg/releases):
 
 ```bash
-sudo dpkg -i accumulo_access_trixie_pg18_0.2.0_amd64.deb
+sudo dpkg -i accumulo_access_trixie_pg18_0.3.0_amd64.deb
 ```
 
 They are built for Debian trixie / amd64 and pre-depend on the matching
@@ -177,7 +177,7 @@ crates.io or a container registry.
 2. Tag the commit and push the tag:
 
    ```bash
-   git tag v0.2.0 && git push origin v0.2.0
+   git tag v0.3.0 && git push origin v0.3.0
    ```
 
 The workflow refuses to run if the tag and `Cargo.toml` disagree. Every package is
